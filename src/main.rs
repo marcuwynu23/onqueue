@@ -1,16 +1,23 @@
+use axum::{
+    extract::Query,
+    response::{IntoResponse, Json},
+    routing::get,
+    Router,
+};
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     collections::BinaryHeap,
-    fs::File,
+    fs::{self, File},
     io::Write,
+    net::SocketAddr,
     process::Command,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
-
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
-use tiny_http::{Response, Server};
+use tokio::{net::TcpListener, task};
 
 #[derive(Debug, Serialize, Deserialize, Eq, Ord, PartialEq, PartialOrd, Clone)]
 struct App {
@@ -23,66 +30,38 @@ struct App {
     retries: u32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct Queue {
     tasks: BinaryHeap<App>,
 }
 
-impl Queue {
-    fn new() -> Self {
+impl Default for Queue {
+    fn default() -> Self {
         Queue {
             tasks: BinaryHeap::new(),
         }
     }
+}
 
-    fn add_task(&mut self, app_name: &str, command: &str) {
-        let app = App {
-            name: app_name.to_string(),
-            command: command.to_string(),
-            status: "queued".to_string(),
-            start_time: None,
-            end_time: None,
-            error_message: None,
-            retries: 0,
-        };
-        self.tasks.push(app);
-    }
-    fn list_tasks(&self) -> String {
-        let mut output = String::new();
-        for app in &self.tasks {
-            output.push_str(&format!(
-                "[{}] {}\n  - status: {}\n  - start: {}\n  - end: {}\n\n",
-                app.name,
-                app.command,
-                app.status,
-                app.start_time.clone().unwrap_or("N/A".into()),
-                app.end_time.clone().unwrap_or("N/A".into()),
-            ));
-        }
-        if output.is_empty() {
-            output.push_str("Queue is empty.\n");
-        }
-        output
-    }
-
+impl Queue {
     fn run_next_task(&mut self, max_retries: u32) {
         let mut remaining = BinaryHeap::new();
 
         while let Some(mut app) = self.tasks.pop() {
             if app.status == "queued" {
-                app.status = "running".to_string();
+                app.status = "running".into();
                 app.start_time = Some(Utc::now().to_rfc3339());
 
                 for attempt in 1..=max_retries {
                     let output = if cfg!(target_os = "windows") {
-                        Command::new("cmd").args(&["/C", &app.command]).output()
+                        Command::new("cmd").args(["/C", &app.command]).output()
                     } else {
                         Command::new("bash").arg("-c").arg(&app.command).output()
                     };
 
                     match output {
                         Ok(ref output) if output.status.success() => {
-                            app.status = "completed".to_string();
+                            app.status = "completed".into();
                             app.end_time = Some(Utc::now().to_rfc3339());
                             println!("[✓] {} ran successfully.", app.name);
                             break;
@@ -110,17 +89,18 @@ impl Queue {
                 }
 
                 if app.status != "completed" {
-                    app.status = "failed".to_string();
+                    app.status = "failed".into();
                     app.end_time = Some(Utc::now().to_rfc3339());
                 }
             }
+
             remaining.push(app);
         }
 
         self.tasks = remaining;
     }
 
-    fn save(&self, filename: &str) {
+    fn save_to_file(&self, filename: &str) {
         if let Ok(yaml) = serde_yaml::to_string(self) {
             if let Ok(mut file) = File::create(filename) {
                 let _ = file.write_all(yaml.as_bytes());
@@ -128,79 +108,92 @@ impl Queue {
         }
     }
 
-    fn load(filename: &str) -> Self {
-        File::open(filename)
-            .ok()
-            .and_then(|file| serde_yaml::from_reader(file).ok())
-            .unwrap_or_else(Queue::new)
+    fn load_from_file(filename: &str) -> Self {
+        if let Ok(content) = fs::read_to_string(filename) {
+            serde_yaml::from_str(&content).unwrap_or_default()
+        } else {
+            Queue::default()
+        }
     }
 }
 
-fn main() {
-    let queue_file = "queue.yml";
-    let queue = Arc::new(Mutex::new(Queue::load(queue_file)));
+type SharedQueue = Arc<Mutex<Queue>>;
 
-    // 👀 Watcher thread that continuously runs tasks
+#[tokio::main]
+async fn main() {
+    let queue_file = "queue.yml";
+    let queue: SharedQueue = Arc::new(Mutex::new(Queue::load_from_file(queue_file)));
+
+    // 👷 Background task runner
     {
         let queue = Arc::clone(&queue);
-        let filename = queue_file.to_string();
-        thread::spawn(move || {
-            loop {
-                {
-                    let mut q = queue.lock().unwrap();
-                    q.run_next_task(3);
-                    q.save(&filename);
-                }
-                thread::sleep(Duration::from_secs(10));
+        let file = queue_file.to_string();
+        task::spawn_blocking(move || loop {
+            {
+                let mut q = queue.lock().unwrap();
+                q.run_next_task(3);
+                q.save_to_file(&file);
             }
+            thread::sleep(Duration::from_secs(10));
         });
     }
 
-    // 🌐 Tiny HTTP server
-    let server = Server::http("0.0.0.0:8080").unwrap();
-    println!("🚀 Server running on http://localhost:8080");
+    // 📡 HTTP routes
+    let app = Router::new()
+        .route("/", get(root))
+        .route(
+            "/list",
+            get({
+                let queue = Arc::clone(&queue);
+                move || list_handler(queue)
+            }),
+        )
+        .route(
+            "/add",
+            get({
+                let queue = Arc::clone(&queue);
+                move |query| add_handler(query, queue, queue_file.to_string())
+            }),
+        );
 
-    for request in server.incoming_requests() {
-        let response = match request.url() {
-            "/" => Response::from_string(
-                "Onqueue is running.\nTry:\n  - /add?name=test&cmd=echo+hello\n  - /list",
-            ),
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let listener = TcpListener::bind(addr).await.unwrap();
+    println!("🚀 Server running on http://{}", addr);
 
-            path if path.starts_with("/add") => {
-                let query = path.splitn(2, '?').nth(1);
-                let mut name = None;
-                let mut cmd = None;
+    axum::serve(listener, app).await.unwrap();
+}
 
-                if let Some(q) = query {
-                    for (key, value) in url::form_urlencoded::parse(q.as_bytes()) {
-                        match key.as_ref() {
-                            "name" => name = Some(value.into_owned()),
-                            "cmd" => cmd = Some(value.into_owned()),
-                            _ => {}
-                        }
-                    }
-                }
+async fn root() -> &'static str {
+    "Onqueue is running.\nTry:\n  - GET /add?name=job1&cmd=echo+hi\n  - GET /list"
+}
 
-                match (name, cmd) {
-                    (Some(n), Some(c)) => {
-                        let mut q = queue.lock().unwrap();
-                        q.add_task(&n, &c);
-                        q.save(queue_file);
-                        Response::from_string(format!("Queued '{}': `{}`", n, c))
-                    }
-                    _ => Response::from_string("Missing `name` or `cmd` query parameters")
-                        .with_status_code(400),
-                }
-            }
+async fn list_handler(queue: SharedQueue) -> impl IntoResponse {
+    let q = queue.lock().unwrap();
+    Json(json!(q.tasks.clone().into_sorted_vec()))
+}
 
-            "/list" => {
-                let q = queue.lock().unwrap();
-                Response::from_string(q.list_tasks())
-            }
+#[derive(Debug, Deserialize)]
+struct AddParams {
+    name: String,
+    cmd: String,
+}
 
-            _ => Response::from_string("404 Not Found").with_status_code(404),
-        };
+async fn add_handler(
+    Query(params): Query<AddParams>,
+    queue: SharedQueue,
+    queue_file: String,
+) -> impl IntoResponse {
+    let mut q = queue.lock().unwrap();
+    q.tasks.push(App {
+        name: params.name.clone(),
+        command: params.cmd.clone(),
+        status: "queued".into(),
+        start_time: None,
+        end_time: None,
+        error_message: None,
+        retries: 0,
+    });
+    q.save_to_file(&queue_file);
 
-        let _ = request.respond(response);
-    }
+    Json(json!({ "queued": params.name, "cmd": params.cmd }))
 }

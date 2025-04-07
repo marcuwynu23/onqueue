@@ -1,43 +1,15 @@
 tasks:
-- name: test
-  command: echo Hello from Onqueue
+- name: test1
+  command: echo hello
   status: completed
-  start_time: 2025-04-07T07:22:16.981952200+00:00
-  end_time: 2025-04-07T07:22:17.020552700+00:00
+  start_time: 2025-04-07T08:32:15.449971200+00:00
+  end_time: 2025-04-07T08:32:15.488481400+00:00
   error_message: null
   retries: 0
 - name: notepad
   command: notepad
   status: completed
-  start_time: 2025-04-07T07:29:13.958319500+00:00
-  end_time: 2025-04-07T07:29:14.399181900+00:00
-  error_message: null
-  retries: 0
-- name: dir
-  command: dir
-  status: completed
-  start_time: 2025-04-07T07:28:53.918425300+00:00
-  end_time: 2025-04-07T07:28:53.956060+00:00
-  error_message: null
-  retries: 0
-- name: datetime
-  command: datetime
-  status: failed
-  start_time: 2025-04-07T07:27:58.808190400+00:00
-  end_time: 2025-04-07T07:28:13.914404200+00:00
-  error_message: null
-  retries: 3
-- name: date
-  command: date
-  status: failed
-  start_time: 2025-04-07T07:27:23.704248100+00:00
-  end_time: 2025-04-07T07:27:38.806097100+00:00
-  error_message: null
-  retries: 3
-- name: app
-  command: ls
-  status: completed
-  start_time: 2025-04-07T07:21:06.926220200+00:00
-  end_time: 2025-04-07T07:21:06.976833200+00:00
+  start_time: 2025-04-07T08:33:05.492988400+00:00
+  end_time: 2025-04-07T08:33:05.861899300+00:00
   error_message: null
   retries: 0
