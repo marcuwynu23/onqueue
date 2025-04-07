@@ -1,4 +1,13 @@
-# 🚀 Onqueue
+<div align="center">
+  <h1> Onqueue </h1>
+</div>
+
+<p align="center">
+  <img src="https://img.shields.io/github/stars/marcuwynu23/onqueue.svg" alt="Stars Badge"/>
+  <img src="https://img.shields.io/github/forks/marcuwynu23/onqueue.svg" alt="Forks Badge"/>
+  <img src="https://img.shields.io/github/issues/marcuwynu23/onqueue.svg" alt="Issues Badge"/>
+  <img src="https://img.shields.io/github/license/marcuwynu23/onqueue.svg" alt="License Badge"/>
+</p>
 
 **Onqueue** is a lightweight, multithreaded task queue runner built in Rust using [Axum](https://github.com/tokio-rs/axum). It supports REST API and CLI-based task management, making it ideal for automating shell commands, deployment tasks, and lightweight job queues.
 
