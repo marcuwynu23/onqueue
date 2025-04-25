@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"  
 authors = ["Mark Wayne Menorca <marcuwynu23@gmail.com>"]
 description = "a lightweight, multithreaded task queue runner"
+license = "MIT"
 [dependencies]
 axum = "0.7"
 tokio = { version = "1.37", features = ["full"] }
